@@ -6,10 +6,3 @@ gitcreds::gitcreds_set()
 
 if(!require("usethis")) install.packages("usethis")
 usethis::git_sitrep()
-
-system('git remote add origin https://github.com/victorms-4/STA9750-2026-FALL.git')
-
-system("git remote -v")
-
-system('git add .')
-system('git commit -m "Initial commit"')
