@@ -19,3 +19,4 @@ data/**
 **/*bspf
 /.quarto/
 **/*.quarto_ipynb
+!docs/Victor_Murra_Schott_Resume_2026.pdf
