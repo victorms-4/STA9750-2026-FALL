@@ -1,0 +1,45 @@
+---
+title: "Victor Murra Schott"
+---
+
+## Welcome!
+
+Hi, I'm Victor Murra Schott, a student at Baruch College. This site documents my coursework and projects for the semester.
+
+### About Me
+I'm currently studying business analytics with a focus in marketing analytics, and working at DIRECTV as a systems analyst. Outside of school and work I like to spend my time outdoors playing golf and softball, as well as playing the piano.
+
+### Links
+- [My Resume](Victor Murra Schott Resume 2026.pdf)
+- [Github Profle](https://github.com/victorms-4)
+- [LinkedIn](https://www.linkedin.com/in/victor-murra-schott/)
+
+### Contact
+You can rech me at [victor.murraschott@gmail.com]
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+
+if(!require("leaflet")){
+    options(repos=c(CRAN="https://cloud.r-project.org"))
+    install.packages("leaflet")
+    stopifnot(require("leaflet"))
+}
+
+baruch_longitude <- -73.98333
+baruch_latitude  <- +40.74028
+
+leaflet() |>
+  addTiles() |>
+  setView(baruch_longitude, baruch_latitude, zoom=17) |>
+  addPopups(baruch_longitude, baruch_latitude, 
+            "I am a Master's student at <b>Baruch College</b>!")
+```
+```{r}
+#| include: false
+1+1
+```
+--------------
+Last Updated: `r format(Sys.time(), "%A %m %d, %Y at %H:%M%p")`
