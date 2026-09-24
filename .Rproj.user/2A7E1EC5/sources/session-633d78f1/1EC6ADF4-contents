@@ -1,0 +1,83 @@
+---
+title: "Houston Housing Market"
+subtitle: "Trends in annual sales, seasonal pricing, and city comparisons using the txhousing dataset"
+author: "Victor Murra Schott"
+format: 
+  revealjs:
+    transition: fade
+---
+
+```{r}
+#| include: false
+if(!require("tidyverse")) install.packages("tidyverse")
+library(tidyverse)
+```
+
+## Annual Sales Trend
+
+```{r}
+#| echo: false
+#| message: false
+txhousing |> 
+  filter(city=="Houston") |> 
+  group_by(year) |> 
+  summarize(sales=sum(sales)) |> 
+  ggplot(aes(x=year, y=sales)) + 
+    geom_line() + 
+    ggtitle("Annual Houses Sold in Houston, TX")
+```
+
+Houston's housing sales have generally trended upward over time, 
+with a notable dip during the 2008 financial crisis followed by 
+a steady recovery.
+
+## Seasonal Pricing Patterns
+
+```{r}
+#| echo: false
+#| message: false
+txhousing |> 
+   filter(city=="Houston") |> 
+    group_by(month) |> 
+    summarize(avg_price=sum(volume) / sum(sales)) |> 
+    mutate(month=factor(month.abb[month], 
+                 levels=month.abb, ordered=TRUE)) |>
+    ggplot(aes(x=month, y=avg_price)) + 
+    geom_bar(stat="identity") + 
+    ggtitle("Average Price of Houses Sold in Houston by Month") + 
+    xlab("Month") + 
+    ylab("Average Sale Price") + 
+    scale_y_continuous(labels = scales::dollar)
+```
+
+Average home prices show some seasonal variation, with certain 
+months consistently commanding higher average sale prices than others.
+
+## Houston vs. Other Texas Cities (2015)
+
+```{r}
+#| echo: false
+#| message: false
+txhousing |> filter(year==2015) |> 
+    group_by(city) |> 
+    summarize(avg_price=sum(volume) / sum(sales),
+              num_sales=sum(sales)) |> 
+    slice_max(num_sales, n=10) |>
+    ggplot(aes(x=city, y=avg_price, fill = city == "Houston")) + 
+    geom_bar(stat="identity") + 
+    ggtitle("Average Price of Houses Sold in 2015 by City in Texas") + 
+    xlab("City") + 
+    ylab("Average Sale Price") + 
+    scale_y_continuous(labels = scales::dollar) +
+    scale_fill_manual(values = c("FALSE"="grey60", "TRUE"="firebrick"), guide="none") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+Among the ten highest-volume Texas markets in 2015, Houston's average 
+sale price falls in the middle range compared to cities like Austin and Collin County.
+
+## Conclusion
+
+- Houston's housing sales have grown substantially over the years, with a clear dip around 2008
+- Home prices exhibit modest seasonal fluctuation throughout the year
+- Relative to other major Texas metros, Houston remains a high-volume but moderately priced market  
