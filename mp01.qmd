@@ -1,5 +1,408 @@
 ---
-title: "Mini-Project Placeholder"
+title: "Mini-Project #01: What We Watched"
+format:
+  html:
+    code-fold: true
 ---
 
-This is a placeholder for STA9750 Mini-Project 1. Check back soon for more!
+```{r}
+#| label: setup
+#| message: false
+#| warning: false
+library(tidyverse)
+library(rvest)
+library(readxl)
+library(fs)
+library(gt)
+library(skimr)
+library(scales)
+
+# Format hours as millions, e.g. 964.1M
+fmt_m <- function(x) paste0(number(x / 1e6, accuracy = 0.1), "M")
+```
+
+## Introduction & Data Acquisition
+
+This report is an analysis on Netflix's "What We Watched" engagement reports. The reports list how many hours people watched each title in six-month periods.
+
+The code for this project came directly from Netflix's corporate relations website. I aggregated the previous seven WWW reports from first-half of 2023 to the first-half of 2026.
+
+```{r}
+#| label: load-function
+#| message: false
+#| warning: false
+#' Acquire Netflix What We Watched Reports
+#' 
+#' This function will acquire and standardize all data for MP#01
+#' from Netflix. Because Netflix hosts the data files behind a CDN, we
+#' are accessing the release pages and automatically extracting links to the
+#' relevant files (with CDN hash). 
+#' 
+#' After import, files are stacked vertically and some basic cleaning is
+#' performed. 
+load_netflix_data <- function(){
+  # Note to students: Make sure you have installed the tidyverse and fs packages
+  #                   before beginning this assignment. If you aren't sure,
+  #                   simply run `library(tidyverse)` at your R Console and, if
+  #                   you don't see an error message, `tidyverse` has been 
+  #                   installed. (Same for `fs`) If you still need to install
+  #                   either package, use the `install.packages` function as 
+  #                   demonstrated in class.
+  library(tidyverse)
+  library(rvest)
+  library(readxl)
+  library(fs)
+  
+  data_dir <- path("data", "mp01")
+    
+  if(!dir_exists(data_dir)){
+    dir_create(data_dir, showWarnings=FALSE, recurse=TRUE)
+  }
+  
+  NETFLIX_URLS <- list(
+    `2023H1` = "https://about.netflix.com/news/what-we-watched-a-netflix-engagement-report",
+    `2023H2` = "https://about.netflix.com/news/what-we-watched-the-second-half-of-2023",
+    `2024H1` = "https://about.netflix.com/news/what-we-watched-the-first-half-of-2024",
+    `2024H2` = "https://about.netflix.com/news/what-we-watched-the-second-half-of-2024",
+    `2025H1` = "https://about.netflix.com/news/what-we-watched-the-first-half-of-2025",
+    `2025H2` = "https://about.netflix.com/news/what-we-watched-the-second-half-of-2025",
+    `2026H1` = "https://about.netflix.com/news/what-we-watched-the-first-half-of-2026"
+  )
+  
+  download_if_needed <- function(url, local){
+    if(!file_exists(local)){
+      download.file(url, local, quiet = TRUE, mode = "wb")
+    }
+    
+    return(local)
+  }
+    
+  NETFLIX_URLS |> 
+    map(read_html) |> 
+    map(html_element, xpath = "//a[contains(@href, '.xlsx')]") |> 
+    map_chr(html_attr, "href") |> 
+    enframe("period", "url") |> 
+   mutate(path = path(data_dir, paste0(period, ".xlsx")), 
+          path = map2(url, path, download_if_needed), 
+          data = map(path, read_excel, skip=3, na="*"), 
+          data = map(data, \(x) x |> mutate(`Release Date` = as.Date(`Release Date`)))) |>
+    unnest(data) |> 
+    select(-url, -path) |> 
+    mutate(year=str_sub(period, 1, 4), 
+           half=str_sub(period, start=6), 
+           period_start = make_date(year, if_else(half==1, 1, 7), 1), 
+           period_end = make_date(year, if_else(half==1, 6, 12), if_else(half==1, 30, 31))) |> 
+    filter(!is.na(`Hours Viewed`)) |> 
+    mutate(live_event = !is.na(Runtime) & str_detect(Runtime, "\\d+:\\d+\\*"), 
+           clean_time = str_remove(Runtime, fixed("*")),
+           Runtime = 60 * hour(hm(clean_time)) + minute(hm(clean_time))) |>
+    select(-clean_time) |>
+    mutate(Runtime = coalesce(Runtime, mean(Runtime, na.rm=TRUE)), 
+           .by=Title, 
+           Title = stringi::stri_trans_general(Title, "Latin-ASCII"),
+           Title = str_remove(Title, " // .*"), 
+           Title = str_remove(Title, "[^[:ascii:]].*"), 
+           Title = str_trim(Title)) |>
+    filter_out(Title == "") |>
+    select(year, 
+           period, 
+           period_start, 
+           period_end, 
+           Title, 
+           -half, 
+           Runtime, 
+           Views, 
+           `Hours Viewed`, 
+           `Release Date`,
+           `Available Globally?`, 
+           live_event)
+}
+```
+
+## Data Cleaning and Preparation
+
+To clean the data, I began by renaming columns to ensure names didn't have any spaces, capitals, and punctuation. Lowercase names with underscores works best when coding, which made handling the datasets a lot easier. I then converted 'year' to an integer so I could use it to sort and group together rows in the datasets. 
+
+```{r}
+#| label: clean-data
+#| message: false
+#| warning: false
+NETFLIX_DATA <- load_netflix_data() |>
+  rename(
+    title              = Title,
+    runtime            = Runtime,
+    views              = Views,
+    hours_viewed       = `Hours Viewed`,
+    release_date       = `Release Date`,
+    available_globally = `Available Globally?`
+  ) |>
+  mutate(
+    year               = as.integer(year),
+    available_globally = available_globally == "Yes"
+  )
+```
+
+## Initial Data Exploration
+
+```{r}
+#| label: initial-eda
+glimpse(NETFLIX_DATA)
+skim(NETFLIX_DATA)
+NETFLIX_DATA |> slice_sample(n = 10)
+```
+
+### What I See In The Data
+
+The data contains `r comma(nrow(NETFLIX_DATA))` rows and `r ncol(NETFLIX_DATA)` columns. There are a few columns that have missing values: "release_date" has `r comma(sum(is.na(NETFLIX_DATA$release_date)))`, "available_globally" has `r comma(sum(is.na(NETFLIX_DATA$available_globally)))`, "runtime" has `r comma(sum(is.na(NETFLIX_DATA$runtime)))`, and "views" has `r comma(sum(is.na(NETFLIX_DATA$views)))`.
+
+## Exploratory Questions
+
+```{r}
+#| label: inline-values
+date_start <- min(NETFLIX_DATA$period_start)
+date_end   <- max(NETFLIX_DATA$period_end)
+
+n_titles <- n_distinct(NETFLIX_DATA$title)
+
+bridgerton_hours <- NETFLIX_DATA |>
+  filter(str_detect(title, "Bridgerton")) |>
+  summarize(total = sum(hours_viewed)) |>
+  pull(total)
+
+stranger_things_hours <- NETFLIX_DATA |>
+  filter(str_detect(title, "Stranger Things")) |>
+  filter_out(str_detect(title, "Beyond Stranger Things")) |>
+  filter_out(str_detect(title, "Tales from")) |>
+  filter_out(str_detect(title, "Fireplace")) |>
+  summarize(total = sum(hours_viewed)) |>
+  pull(total)
+
+top10_share <- NETFLIX_DATA |>
+  filter(period == "2026H1") |>
+  mutate(total = sum(hours_viewed)) |>
+  slice_max(hours_viewed, n = 10, with_ties = FALSE) |>
+  summarize(share = sum(hours_viewed) / first(total)) |>
+  pull(share)
+
+global_by_title <- mean(NETFLIX_DATA$available_globally, na.rm = TRUE)
+
+global_by_hours <- NETFLIX_DATA |>
+  filter(!is.na(available_globally)) |>
+  summarize(share = sum(hours_viewed[available_globally]) / sum(hours_viewed)) |>
+  pull(share)
+```
+
+1. What date range is covered by this data set? **`r format(date_start, "%B %d, %Y")` to `r format(date_end, "%B %d, %Y")`**
+2. How many different shows and movies are covered in this data set? **`r comma(n_titles)`**
+3. How many total hours have been spent watching shows from the Bridgerton universe? **`r comma(bridgerton_hours)` hours**
+4. How many total hours have been spent watching the five seasons of Stranger Things? **`r comma(stranger_things_hours)` hours**
+5. What percentage of total watch time was spent on the top 10 titles of 2026H1? **`r percent(top10_share, accuracy = 0.1)`**
+6. What fraction of Netflix's catalog is globally available? **`r percent(global_by_title, accuracy = 0.1)` by title, `r percent(global_by_hours, accuracy = 0.1)` weighted by hours viewed**
+
+## Exploratory Tables
+
+### Top Title per Period
+
+```{r}
+#| label: top-title-table
+top_titles <- NETFLIX_DATA |>
+  mutate(total_hours = sum(hours_viewed), .by = period) |>
+  slice_max(hours_viewed, n = 1, by = period, with_ties = FALSE) |>
+  mutate(share = hours_viewed / total_hours) |>
+  arrange(period) |>
+  select(period, title, hours_viewed, share)
+
+top_overall <- top_titles |>
+  slice_max(hours_viewed, n = 1, with_ties = FALSE)
+
+top_titles |>
+  gt() |>
+  cols_label(period = "Period", title = "Top Title",
+             hours_viewed = "Hours Viewed", share = "Share of Total Viewing") |>
+  fmt_number(hours_viewed, suffixing = TRUE, decimals = 1) |>
+  fmt_percent(share, decimals = 1) |>
+  tab_header(title = "Top Title Per Period") |>
+  tab_source_note(md("Source: Netflix *What We Watched* engagement reports, 2023H1-2026H1."))
+```
+
+Squid Game: Season 2 was the only title that was the top title in 2 different periods, appearing as the top title for 2024H2 and 2025H1. `r top_overall$title` had the most hours viewed across all top titles with `r fmt_m(top_overall$hours_viewed)` in `r top_overall$period`.
+
+### Catalog Size Over Time
+
+```{r}
+#| label: catalog-size-table
+catalog <- NETFLIX_DATA |>
+  summarize(n_titles = n_distinct(title),
+            total_runtime_hours = sum(runtime, na.rm = TRUE) / 60,
+            .by = period) |>
+  arrange(period)
+
+catalog_growth <- catalog |>
+  filter(period >= "2023H2") |>
+  summarize(title_growth = last(n_titles) / first(n_titles) - 1,
+            runtime_growth = last(total_runtime_hours) / first(total_runtime_hours) - 1)
+
+catalog |>
+  gt() |>
+  cols_label(period = "Period", n_titles = "Number of Titles",
+             total_runtime_hours = "Total Runtime (hours)") |>
+  fmt_number(n_titles, decimals = 0) |>
+  fmt_number(total_runtime_hours, suffixing = TRUE, decimals = 1) |>
+  tab_header(title = "Catalog Size Over Time") |>
+  tab_source_note(md("Source: Netflix *What We Watched* engagement reports."))
+```
+
+Since 2023H2, both the number of titles and total runtime have shown growth period-over-period. In this time frame, number of titles has increased by ~`r percent(catalog_growth$title_growth, accuracy = 1)` and total runtime has increased by ~`r percent(catalog_growth$runtime_growth, accuracy = 1)`.
+
+### Consistently High Viewership
+
+```{r}
+#| label: consistent-viewership-table
+n_all_periods <- n_distinct(NETFLIX_DATA$period)
+
+consistent <- NETFLIX_DATA |>
+  summarize(n_periods = n(),
+            avg_hours = mean(hours_viewed),
+            min_hours = min(hours_viewed),
+            sd_hours  = sd(hours_viewed),
+            .by = title) |>
+  filter(n_periods == n_all_periods) |>
+  slice_max(min_hours, n = 10, with_ties = FALSE)
+
+top_avg <- consistent |>
+  slice_max(avg_hours, n = 1, with_ties = FALSE)
+
+consistent |>
+  gt() |>
+  cols_label(title = "Title", n_periods = "Periods Appearing",
+             avg_hours = "Average Hours", min_hours = "Minimum Hours",
+             sd_hours = "Std. Dev. of Hours") |>
+  fmt_number(c(avg_hours, min_hours, sd_hours), suffixing = TRUE, decimals = 1) |>
+  tab_header(title = "Consistently High Viewership") |>
+  tab_source_note(md("Source: Netflix *What We Watched* engagement reports."))
+```
+
+Breaking Bad is the only show to have multiple seasons appear as top shows in multiple periods. `r top_avg$title` had the highest average hours by a wide margin of `r fmt_m(top_avg$avg_hours)` hours.
+
+### Shows vs Movies
+
+```{r}
+#| label: shows-vs-movies-table
+type_share <- NETFLIX_DATA |>
+  mutate(type = if_else(coalesce(runtime > 240, FALSE) |
+                          str_detect(title, "Season"),
+                        "Show", "Movie")) |>
+  summarize(hours = sum(hours_viewed), .by = c(period, type)) |>
+  mutate(share = hours / sum(hours), .by = period) |>
+  select(period, type, share) |>
+  pivot_wider(names_from = type, values_from = share) |>
+  arrange(period)
+
+type_recent <- type_share |>
+  filter(period >= "2023H2")
+
+type_share |>
+  gt() |>
+  cols_label(period = "Period", Show = "Shows", Movie = "Movies") |>
+  fmt_percent(c(Show, Movie), decimals = 1) |>
+  tab_header(title = "Shows vs Movies") |>
+  tab_source_note(md("Source: Netflix *What We Watched* engagement reports. Shows are titles over 4 hours or containing 'Season'."))
+```
+
+Since 2023H2, shows consistently account for over `r floor(100 * min(type_recent$Show))`% of viewership. This remains consistent over these periods with the lowest percentage being `r percent(min(type_recent$Show), accuracy = 0.1)` in `r type_recent$period[which.min(type_recent$Show)]` and the highest being `r percent(max(type_recent$Show), accuracy = 0.1)` in `r type_recent$period[which.max(type_recent$Show)]`.
+
+### Live vs Pre-Taped
+
+```{r}
+#| label: live-vs-pretaped-table
+live_summary <- NETFLIX_DATA |>
+  summarize(n_titles = n(),
+            avg_hours = mean(hours_viewed),
+            median_hours = median(hours_viewed),
+            top_decile_hours = quantile(hours_viewed, 0.9),
+            max_hours = max(hours_viewed),
+            .by = live_event) |>
+  mutate(live_event = if_else(live_event, "Live Event", "Pre-Taped"))
+
+pretaped_row <- live_summary |> filter(live_event == "Pre-Taped")
+live_row     <- live_summary |> filter(live_event == "Live Event")
+
+live_summary |>
+  gt() |>
+  cols_label(live_event = "Content Type", n_titles = "Titles",
+             avg_hours = "Average", median_hours = "Median",
+             top_decile_hours = "90th Percentile", max_hours = "Maximum") |>
+  fmt_number(c(avg_hours, median_hours, top_decile_hours, max_hours),
+             suffixing = TRUE, decimals = 1) |>
+  tab_spanner(label = "Hours Viewed",
+              columns = c(avg_hours, median_hours, top_decile_hours, max_hours)) |>
+  tab_header(title = "Live vs Pre-Taped") |>
+  tab_source_note(md("Source: Netflix *What We Watched* engagement reports."))
+```
+
+Pre-taped content performs significantly better than live events. The average hours viewed for pre-taped content is `r fmt_m(pretaped_row$avg_hours)` while the average for live events is `r fmt_m(live_row$avg_hours)`. Even when evaluating 'top tier' content, the 90th percentile for pre-taped is `r fmt_m(pretaped_row$top_decile_hours)` while live events sit at `r fmt_m(live_row$top_decile_hours)`. This can be attributed to pre-taped content significantly more titles than live events, with pre-taped having `r comma(pretaped_row$n_titles)` titles and live events only having `r comma(live_row$n_titles)`.
+
+## Supporting Calculations for the Strategy Memo
+
+```{r}
+#| label: memo-calculations
+share_by_period <- NETFLIX_DATA |>
+  summarize(
+    global_share = sum(hours_viewed[available_globally], na.rm = TRUE) / sum(hours_viewed),
+    live_share   = sum(hours_viewed[live_event], na.rm = TRUE) / sum(hours_viewed),
+    .by = period
+  ) |>
+  arrange(period)
+
+global_first <- percent(first(share_by_period$global_share), accuracy = 0.1)
+global_last  <- percent(last(share_by_period$global_share), accuracy = 0.1)
+live_first   <- percent(first(share_by_period$live_share), accuracy = 0.1)
+live_last    <- percent(last(share_by_period$live_share), accuracy = 0.1)
+```
+
+```{r}
+#| label: memo-format-calculations
+# Classify each title using the same heuristic as the Shows vs Movies table
+NETFLIX_TYPED <- NETFLIX_DATA |>
+  mutate(type = if_else(coalesce(runtime > 240, FALSE) |
+                          str_detect(title, "Season"),
+                        "Show", "Movie"),
+         distribution = if_else(available_globally, "Global", "Licensed"))
+
+# Overall share of hours: shows vs. movies
+show_share_overall <- NETFLIX_TYPED |>
+  summarize(share = sum(hours_viewed[type == "Show"]) / sum(hours_viewed)) |>
+  pull(share)
+
+movie_share_overall <- 1 - show_share_overall
+
+# Hours by format and distribution (four segments)
+segments <- NETFLIX_TYPED |>
+  filter(!is.na(distribution)) |>
+  summarize(hours = sum(hours_viewed), .by = c(type, distribution)) |>
+  mutate(share = hours / sum(hours)) |>
+  arrange(desc(hours))
+
+top_segment <- slice(segments, 1)
+
+top_distribution <- str_to_lower(top_segment$distribution)  # "global" or "licensed"
+top_format       <- if_else(top_segment$type == "Show", "TV", "movie")
+top_category     <- paste(top_distribution,
+                          if_else(top_segment$type == "Show", "TV shows", "movies"))
+```
+
+## Platform Strategy Memo
+
+Netflix's What We Watched engagement reports provide insight into viewing behavior by showing how much time viewers spent watching different types of content on the platform. For this analysis, I examined Netflix's viewing data to compare engagement across two major categories: TV shows versus movies and global versus licensed content. These comparisons help illustrate whether Netflix engagement is primarily driven by the format of the content or by the type of content Netflix delivers to its audience.
+
+One of the most noticeable differences in the data is the higher level of engagement generated by TV shows compared to movies. TV shows accounted approximately for `r percent(show_share_overall, accuracy = 0.1)` of total hours viewed, compared with `r percent(movie_share_overall, accuracy = 0.1)` for movies. One possible explanation for this difference is the episodic nature of TV shows. Unlike a movie, which typically provides one viewing experience, a television series can encourage viewers to watch multiple episodes or entire seasons. The structure of television programming also gives Netflix more opportunities to accumulate viewing hours from a single title. A viewer who watches an eight-episode series may contribute several hours of engagement, while a typical movie may only contribute two hours or less. However, higher total viewing hours do not necessarily mean that the individual television titles are more popular than individual movies, since the longer cumulative runtime of a series naturally creates more opportunities for viewing.Therefore, hours viewed should be interpreted as a measure of overall engagement rather than a direct measurement of popularity. Overall, the data suggests that television shows play a particularly important role in driving Netflix engagement. Their episodic structure provides more opportunities for extended viewing, which can result in substantially higher cumulative watch time than individual movies.
+
+Another important distinction in the Netflix dataset is between global content and licensed content. This comparison provides insight into the relative contribution of Netflix's own globally distributed programming versus content acquired from other content owners. The analysis indicates that global content generated a greater amount of viewing engagement than licensed content, suggesting that Netflix's investment in internationally available programming has become an important component of its content strategy. The strong performance of global content demonstrates that Netflix does not necessarily need content to originate from the United States to generate significant engagement among its worldwide audience. Despite Netflix's significant investment in original and globally distributed programming, licensed content continues to account for a substantial portion of total viewing. This suggests that acquired programming remains an important component of Netflix's overall content strategy. Licensed content can provide Netflix with recognizable titles that already have substantial audiences, potentially reducing the need to build awareness of a program from the ground up. Global content, meanwhile, allows Netflix to reach audiences across multiple markets while also introducing viewers to stories, actors, and cultures from outside their home countries. 
+
+While comparing TV shows with movies provides insight into the format of content, comparing global and licensed programming adds another dimension to the analysis. Together, these categories can help identify which combination of content type and distribution strategy generates the most engagement. For example, global TV shows, licensed TV shows, global movies, and licensed movies can each be viewed as separate segments of Netflix's content portfolio. The data shows that `r top_category` generated the highest level of engagement among the four categories. This suggests that the combination of `r top_format` format and `r top_distribution` content may be particularly effective at generating viewing time. This finding suggests that engagement cannot be explained by a single factor. Instead, the interaction between content format and content ownership may play an important role in determining how much time viewers spend on the platform.
+
+::: {.callout-note title="AI Usage Statement" collapse="true"}
+
+AI was used to generate some of the code to put together the tables and calculations for this assignment. The analysis for each section was written by hand, referencing values that were generated from the AI prompts.
+
+:::
